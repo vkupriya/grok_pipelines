@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-configmap2
+data:
+  patterns: |
+    CISCOTIMESTAMP %{MONTH} %{MONTHDAY} %{YEAR} %{TIME}
+    CISCOTIMESTAMPTZ %{CISCOTIMESTAMP}( %{TZ})?
+    NEXUSTIMESTAMP %{YEAR} %{MONTH} %{MONTHDAY} %{TIME}( %{TZ})?
+    BRACKETS (\(.*?\))
+    CFTIMESTAMP %{MONTH} %{MONTHDAY} %{TIME}
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    path.config: /usr/share/logstash/pipeline
+  logstash.conf: |
+    # all input will come from syslog 514
+    input {
+      udp {
+        port => 5114
+        type => "syslog-cisco"
+      }
+      tcp {
+        port => 5114
+        type => "syslog-cisco"
+      }
+    }
+    filter {
+      mutate { add_field => { "sourcetype" => "bluecoat_proxy"} }
+      
+      grok {
+      pattern_definitions => { "CFTIMESTAMP" => '%{MONTH} %{MONTHDAY} %{TIME}' }
+        match => {"message" => '%{CFTIMESTAMP:date} %{IPORHOST:hostname}  %{TIMESTAMP_ISO8601:time} %{INT:duration:int} %{IPORHOST:c_ip} %{INT:sc_status} (?:%{WORD:s_action}|%{NOTSPACE:s_action}) %{INT:sc_bytes:int} %{INT:cs_bytes:int} %{WORD:cs_method} (?:%{WORD:cs_uri_scheme}|%{NOTSPACE:cs_uri_scheme}) %{GREEDYDATA:unparsed_msg}'}
+        # Generic 'Starter' Grok
+      }
+      if [cs_uri_scheme] == "http" or [cs_uri_scheme] == "tcp" or [cs_uri_scheme] == "ftp" {
+        csv {
+        source => "unparsed_msg"
+        separator => " "
+        columns => ["cs_host","cs_uri_port","cs_uri_path","cs_uri_query","cs_username","cs_auth_group","s_hierarchy","s_supplier_name","rs_content_type","cs_referer","cs_user_agent","sc_filter_result","cs_categories","cs_x_forwarded_for","x_virus_id","s_ip","x_virus_details","s_icap_status","x_appliance_product_name","cs_uri_address","localtime","s_port"]
+        }
+      } else if [cs_uri_scheme] == "https" or [cs_uri_scheme] == "ssl" {
+        csv {
+        source => "unparsed_msg"
+        separator => " "
+        columns => ["cs_host","cs_uri_port","cs_uri_path","cs_uri_query","cs_username","cs_auth_group","s_supplier_name","rs_content_type","cs_referer","cs_user_agent","sc_filter_result","cs_categories","cs_x_forwarded_for","x_virus_id","s_ip","x_virus_details","s_icap_status","x_appliance_product_name","localtime","s_port","x_rs_certificate_validate_status","x_rs_certificate_observed_errors","x_cs_ocsp_error","x_rs_ocsp_error","x_rs_con_neg_ssl_v","x_rs_con_cipher","x_rs_neg_cipher_size","x_rs_cert_hostname","x_rs_cert_hostname_category","cs_uri_address","x_cs_con_neg_ssl_version","x_cs_con_neg_ssl_cipher","x_cs_con_neg_ssl_cipher_size","x_cs_cert_subject" ]
+        }
+      }
+      mutate {
+        remove_field => ["unparsed_msg"]
+      }
+    }
+
+    output {
+      if "_grokparsefailure" in [tags] {
+        stdout {}
+      }
+        elasticsearch {
+          index => "syslog-networks2-%{+YYYY.MM.dd}"
+          hosts => [ "${ES_HOSTS}" ]
+          user => "${ES_USER}"
+          password => "${ES_PASSWORD}"
+          cacert => '/etc/logstash/certificates/ca.crt'
+          document_type   => "%{type}"
+         #document_id     => "%{fingerprint}"
+        }
+      }

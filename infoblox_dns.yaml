@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-configmap2
+data:
+  patterns: |
+    CISCOTIMESTAMP %{MONTH} %{MONTHDAY} %{YEAR} %{TIME}
+    CISCOTIMESTAMPTZ %{CISCOTIMESTAMP}( %{TZ})?
+    NEXUSTIMESTAMP %{YEAR} %{MONTH} %{MONTHDAY} %{TIME}( %{TZ})?
+    BRACKETS (\(.*?\))
+    CFTIMESTAMP %{MONTH} %{MONTHDAY} %{TIME}
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    path.config: /usr/share/logstash/pipeline
+  logstash.conf: |
+    # all input will come from syslog 514
+    input {
+      udp {
+        port => 5114
+        type => "syslog-cisco"
+      }
+      tcp {
+        port => 5114
+        type => "syslog-cisco"
+      }
+    }
+    filter {
+      grok {
+        pattern_definitions => { "CFTIMESTAMP" => '%{MONTHDAY}-%{MONTH}-%{YEAR} %{TIME}' }
+        match => {"message" => "%{CFTIMESTAMP:syslog_timestamp}.%{INT} client %{IPORHOST:client_ip}#%{INT:port}: %{WORD:protocol}: query: %{DATA:query} %{WORD:dns_class} %{WORD:record_type} response: %{WORD:response_code} \+( %{GREEDYDATA:response_data})?"}
+      }
+     }
+
+    output {
+      if "_grokparsefailure" in [tags] {
+        stdout {}
+      }
+        elasticsearch {
+          index => "syslog-networks2-%{+YYYY.MM.dd}"
+          hosts => [ "${ES_HOSTS}" ]
+          user => "${ES_USER}"
+          password => "${ES_PASSWORD}"
+          cacert => '/etc/logstash/certificates/ca.crt'
+          document_type   => "%{type}"
+         #document_id     => "%{fingerprint}"
+        }
+      }
+    
